@@ -16,7 +16,7 @@ git clone https://github.com/GabrielKP/gif2flipbook
 cd gif2flipbook
 
 # setup virtual environment (optional)
-conda create -n gif2flipbook python=3.9
+conda create -n gif2flipbook python=3.11
 conda activate gif2flipbook
 
 # install python packages
