@@ -12,9 +12,113 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from pypdf import PdfMerger
 
 
+def get_resized_dimensions(
+    cwd: str, border: int, no_size_increase: bool
+) -> Tuple[int, int, float]:
+    frame = Image.open(
+        os.path.join(
+            cwd,
+            "temporary",
+            "0.png",
+        )
+    )
+
+    # determine how gif should be resized.
+    width, height = frame.size
+
+    # 2550: width of 300ppi US letter page in pixels
+    printable_width = 2550 / 2 - 2 * border
+    # 3300: height of 300ppi US letter page in pixels
+    # 150: space for page number text
+    printable_height = 3300 / 2 - 2 * border - 150
+    width_check = 1 - (width - printable_width) / width
+    height_check = 1 - (height - printable_height) / height
+    if width_check < 1 or height_check < 1:
+        resize_factor = min([width_check, height_check])
+    elif not no_size_increase and width_check > 1 and height_check > 1:
+        resize_factor = min([width_check, height_check])
+    else:
+        resize_factor = 1
+
+    # Get updated width and height
+    frame = frame.resize(
+        (
+            math.floor(resize_factor * width),
+            math.floor(resize_factor * height),
+        )
+    )
+    width_resized, height_resized = frame.size
+
+    return width_resized, height_resized, resize_factor
+
+
+def get_number_image(number: int, numbers_font: ImageFont.FreeTypeFont) -> Image.Image:
+    page_number_box = numbers_font.getbbox(str(number))
+    number_image_size = (
+        math.floor((page_number_box[2] - page_number_box[0]) * 2),
+        math.floor((page_number_box[3] - page_number_box[1]) * 2),
+    )
+    number_image = Image.new("RGBA", number_image_size, (255, 255, 255, 0))
+    number_image_editable = ImageDraw.Draw(number_image)
+    number_image_editable.text(
+        (
+            math.floor(number_image_size[0] / 2),
+            math.floor(number_image_size[1] / 2),
+        ),
+        str(number),
+        font=numbers_font,
+        fill="LightSlateGrey",
+        anchor="mm",
+    )
+    return number_image
+
+
+def paste_number_image(
+    blank_canvas: Image.Image,
+    number_image: Image.Image,
+    border: int,
+    frame_mod: int,
+):
+    width, height = number_image.size
+    half_width = width / 2
+    if frame_mod == 0:
+        blank_canvas.paste(
+            number_image.rotate(180),
+            (
+                math.floor(2550 * 0.25 - half_width),
+                math.floor(3300 / 2 - border - height),
+            ),
+        )
+    elif frame_mod == 1:
+        blank_canvas.paste(
+            number_image.rotate(180),
+            (
+                math.floor(2550 * 0.75 - half_width),
+                math.floor(3300 / 2 - border - height),
+            ),
+        )
+    elif frame_mod == 2:
+        blank_canvas.paste(
+            number_image,
+            (
+                math.floor(2550 * 0.25 - half_width),
+                math.floor(3300 / 2 + border),
+            ),
+        )
+    else:
+        blank_canvas.paste(
+            number_image,
+            (
+                math.floor(2550 * 0.75 - half_width),
+                math.floor(3300 / 2 + border),
+            ),
+        )
+
+
 def gif2flipbook(
     path_video: str,
     path_pdf: str | None = None,
+    rotate: int = -90,
     no_lines: bool = False,
     border: int = 75,
     no_size_increase: bool = False,
@@ -30,13 +134,13 @@ def gif2flipbook(
     path_pdf : str, default=`None`
         Path for the pdf which will be generated, if `None` will use the same path
         as the input video with the extension changed to `.pdf`.
+    rotate : int, default=`90`
+        Rotate the video by the specified number of degrees.
     no_lines : bool, default=`False`
         Do not print the guiding lines on the flipbook pages.
     border : int, default=`75`
         Non-printable border at the top and bottom of the page (in pixels).
     """
-
-    path_video = "/Volumes/opt/gif2flipbook/GIFS/hug.gif"
 
     cwd = os.getcwd()
     numbers_font = ImageFont.truetype(os.path.join(cwd, "baskvl.ttf"), 60)
@@ -68,105 +172,73 @@ def gif2flipbook(
 
     print(f"Number of frames: {n_frames}")
 
-    # The dictionary "image_layout" contains keys mapping to the GIF indices and
-    # values containing the string equivalent of the expressions required to determine
-    # the x,y coordinates of the upper-left corner of the resized PNG images that will
-    # be pasted onto "blank_canvas" or "blank_canvas_reverse". These cannot be determined
-    # at this point, as the "resizing_factor" has not yet been calculated for each GIF.
-    # An "eval()" method will be called later in the code upon obtaining this information,
-    # effectively updating the values of "image_layout" for the corresponding x,y tuples.
-    image_layout_dcts = {
-        0: "(math.floor(8.5/4*300-width/2), border)",
-        1: "(math.floor(8.5*0.75*300-width/2), border)",
-        2: "(math.floor(8.5*0.75*300-width/2), math.floor(11*300-border-height))",
-        3: "(math.floor(8.5/4*300-width/2), math.floor(11*300-border-height))",
-    }
-
     # Each frame will be saved as an individual PDF document, and these will
     # be merged together after the end of the "for i in range(maximum_frame_number):" loop.
     pdf_number = 0
 
-    width_resized = None
-    height_resized = None
-    resize_factor = None
-    image_layout = None
+    # get resized dimensions
+    width_resized, height_resized, resize_factor = get_resized_dimensions(
+        cwd, border, no_size_increase
+    )
+    dimensions = (width_resized, height_resized)
+
+    # where to place the gif
+    pos_left_top = (border, border)
+    pos_right_top = (2550 - border - width_resized, border)
+    pos_left_bot = (border, 3300 - border - height_resized)
+    pos_right_bot = (2550 - border - width_resized, 3300 - border - height_resized)
+    positions = {
+        0: pos_left_top,
+        1: pos_right_top,
+        2: pos_left_bot,
+        3: pos_right_bot,
+    }
+
+    n_pdfs = n_frames // 4 + 1
     pdf_path = os.path.join(cwd, str(date.today()) + " flipbook", "PDF_parts")
-    for i_frame in range(n_frames):
-        # A blank canvas (white US letter JPEG image, with a resolution of 300 ppi (2550x3300 px))
-        # is generated for the first GIF and will contain frames from 4 different GIFS.
+    idx_frame = 0
+    for _ in range(n_pdfs):
+        # Blank canvas (white US letter JPEG image, 300 ppi, 2550x3300 px)
         blank_canvas = Image.open(os.path.join(cwd, "blank_canvas.jpg")).convert("RGB")
         blank_canvas_editable = ImageDraw.Draw(blank_canvas)
 
-        if i_frame == 0:
-            frame = Image.open(
+        # Paste frames on canvas
+        for frame_mod in range(4):
+            frame_i = Image.open(
                 os.path.join(
                     cwd,
                     "temporary",
-                    f"{i_frame}.png",
+                    f"{idx_frame}.png",
                 )
+            ).convert("RGB")
+
+            # resize image
+            if resize_factor != 1:
+                frame_i = frame_i.resize(dimensions, resample=Image.Resampling.LANCZOS)
+
+            # rotate image
+            if rotate != 0:
+                frame_i = frame_i.rotate(rotate)
+
+            # paste image
+            if frame_mod in [0, 1]:
+                frame_i = frame_i.rotate(180)
+            blank_canvas.paste(frame_i, cast(Tuple[int, int], positions[frame_mod]))
+
+            # paste number
+            number_image = get_number_image(idx_frame, numbers_font)
+            paste_number_image(
+                blank_canvas=blank_canvas,
+                number_image=number_image,
+                border=border,
+                frame_mod=frame_mod,
             )
-            # The width and height of the frame will be checked against the available
-            # space on the quarter of page on which it would be printed. If the image is
-            # too small or too big, The default value of one for "resize_factor" would then
-            # be the minimum between "width_check" and "height_check" to ensure that the resized
-            # image will fit into the available space.
-            width, height = frame.size
 
-            width_check = 1 - (width - (8.5 / 2 * 300 - 2 * border)) / width
-            height_check = 1 - (height - (4.5 * 300 - border)) / height
-            if width_check < 1 or height_check < 1:
-                resize_factor = min([width_check, height_check])
-            elif not no_size_increase and width_check > 1 and height_check > 1:
-                resize_factor = min([width_check, height_check])
-            else:
-                resize_factor = 1
+            idx_frame += 1
+            if idx_frame == n_frames:
+                break
 
-            # Should the "resize_factor" not be equal to one, it means that the
-            # PNG images need to be resized. The updated "width" and "height" x,y tuple
-            # for the resized images will allow to position the images correctly on the flipbooks.
-            frame = frame.resize(
-                (
-                    math.floor(resize_factor * width),
-                    math.floor(resize_factor * height),
-                )
-            )
-            width_resized, height_resized = frame.size
-
-        dimensions = (cast(int, width_resized), cast(int, height_resized))
-
-        # Now that the resized image dimensions are known for every GIF, the values
-        # within the "image_layout" mapping to every GIF index (the keys of the dictionary)
-        # will be updated using an "eval()" method. This only needs to be done for the first
-        # run through the "for i in range(len(maximum_frame_number)):" loop, as the same
-        # x, y tuples of the upper-left corners of the PNG images for every GIF will be
-        # used throughout when pasting the images.
-        if i_frame == 0:
-            image_layout = eval(image_layout_dcts[0])
-
-        frame_k = Image.open(
-            os.path.join(
-                cwd,
-                "temporary",
-                f"{i_frame}.png",
-            )
-        ).convert("RGB")
-
-        # If "resize_factor" wasn't equal to one, it means that the PNG images for
-        # the given GIF needs to be resized according to the updated width and height
-        # values.
-        if resize_factor != 1:
-            frame_k = frame_k.resize(dimensions, resample=Image.Resampling.LANCZOS)
-
-        # # The current frame index followed by the PIL image of the frame "frame_k"
-        # # are appended to "FrameNumber_PILImage"
-        # FrameNumber_PILImage[j].append([png_index_list[j][i], frame_k])
-
-        blank_canvas.paste(frame_k.rotate(180), cast(Tuple[int, int], image_layout))
-
-        # If the user hasn't passed in the "no_lines" argument, a horizontal and vertical
-        # line will be drawn in order to divide the pages into quarters, which will facilitate
-        # cutting the pages and assembling the flipbooks. These lines are only drawn on one side
-        # of each sheet of paper.
+        # Draw lines on canvas
         if not no_lines:
             blank_canvas_editable.line(
                 [(2550 / 2, 0), (2550 / 2, 3300)], fill="Gainsboro", width=5
@@ -175,85 +247,17 @@ def gif2flipbook(
                 [(0, 3300 / 2), (2550, 3300 / 2)], fill="Gainsboro", width=5
             )
 
-        # The frame number in the top of each quadrant in order to facilitate flipbook assembly.
-        # The function below creates an image with the number text, which will be pasted over
-        # the "blank_canvas" and "blank_canvas_reverse". Such a function is used instead of
-        # writing directly on "blank_canvas" and "blank_canvas_reverse", since two of the
-        # numbers need to be flipped.
-        def text_image(number, numbers_font):
-            page_number_box = numbers_font.getbbox(str(number))
-            page_number_size = (
-                math.floor((page_number_box[2] - page_number_box[0]) * 2),
-                math.floor((page_number_box[3] - page_number_box[1]) * 2),
-            )
-            page_number_text = Image.new("RGBA", page_number_size, (255, 255, 255, 0))
-            page_number_text_editable = ImageDraw.Draw(page_number_text)
-            page_number_text_editable.text(
+        # scale pdf
+        if pdf_resolution != 300:
+            blank_canvas = blank_canvas.resize(
                 (
-                    math.floor(page_number_size[0] / 2),
-                    math.floor(page_number_size[1] / 2),
+                    round(2550 * pdf_resolution / 300),
+                    round(3300 * pdf_resolution / 300),
                 ),
-                str(number),
-                font=numbers_font,
-                fill="LightSlateGrey",
-                anchor="mm",
+                resample=Image.Resampling.LANCZOS,
             )
-            return page_number_text, page_number_size
 
-        # The number text images are pasted onto "blank_canvas" in the top of each flipbook page,
-        # with central horizontal alignment. The numbers of the upper two quadrants need to be
-        # flipped (rotated 180 degrees), as the GIF frames are also flipped in these quadrants.
-        # The page numbering corresponds to "maximum_frame_number-i", as the last frame is printed
-        # first on odd-numbered pages of the PDF document.
-        page_number_text, page_number_size = text_image(
-            n_frames - i_frame, numbers_font
-        )
-        page_number_half_width = page_number_size[0] / 2
-        blank_canvas.paste(
-            page_number_text.rotate(180),
-            (
-                math.floor(2550 * 0.25 - page_number_half_width),
-                math.floor(3300 / 2 - border - page_number_size[1]),
-            ),
-        )
-        blank_canvas.paste(
-            page_number_text.rotate(180),
-            (
-                math.floor(2550 * 0.75 - page_number_half_width),
-                math.floor(3300 / 2 - border - page_number_size[1]),
-            ),
-        )
-        blank_canvas.paste(
-            page_number_text,
-            (
-                math.floor(2550 * 0.25 - page_number_half_width),
-                math.floor(3300 / 2 + border),
-            ),
-        )
-        blank_canvas.paste(
-            page_number_text,
-            (
-                math.floor(2550 * 0.75 - page_number_half_width),
-                math.floor(3300 / 2 + border),
-            ),
-        )
-
-        # The "blank_canvas" and "blank_canvas_reverse" images are scaled according to the "pdf_resolution" dpi value,
-        # taking into account that the initial canvas pixel size was 2550x3300 px for a 300 dpi canvas (typical quality
-        # used in professional printing jobs).
-        blank_canvas = blank_canvas.resize(
-            (
-                round(2550 * pdf_resolution / 300),
-                round(3300 * pdf_resolution / 300),
-            ),
-            resample=Image.Resampling.LANCZOS,
-        )
-
-        # The path "pdf_path" will store the separate PDF files for each frame,
-        # and the merging of the PDF files will be done using the PdfMerger Class
-        # from the pyPDF module, as otherwise the assembly of a large PDF file is
-        # quite lengthy towards the end of the process with PIL, as the file rapidly
-        # becomes too large.
+        # Save intermittent pdf, as PIL pdf get too big
         if not os.path.exists(pdf_path):
             os.makedirs(pdf_path)
         pdf_number += 1
@@ -300,14 +304,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--path_video", type=str, help="path to the video to be converted."
     )
-    # parser.add_argument(
-    #     "path_pdf",
-    #     type=str,
-    #     nargs="?",
-    #     default=None,
-    #     required=False,
-    #     help="Path for the pdf which will be generated.",
-    # )
+    parser.add_argument(
+        "--rotate",
+        type=int,
+        default=-90,
+        help="Rotate the video by the specified number of degrees.",
+    )
     parser.add_argument(
         "--no_lines",
         action="store_true",
@@ -340,7 +342,7 @@ if __name__ == "__main__":
 
     gif2flipbook(
         path_video=args.path_video,
-        # path_pdf=args.path_pdf,
+        rotate=args.rotate,
         no_lines=args.no_lines,
         border=args.border,
         no_size_increase=args.no_size_increase,
