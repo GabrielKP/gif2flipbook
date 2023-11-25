@@ -1,24 +1,21 @@
 import argparse
-import glob
 import math
 import os
-import re
-import shutil
 import sys
-from datetime import date
+import tempfile
+from pathlib import Path
 from typing import List, Tuple, cast
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfMerger
 
 
 def get_resized_dimensions(
-    cwd: str, border: int, no_size_increase: bool
+    temp_dir: Path, border: int, no_size_increase: bool
 ) -> Tuple[int, int, float]:
     frame = Image.open(
         os.path.join(
-            cwd,
-            "temporary",
+            temp_dir,
             "0.png",
         )
     )
@@ -142,156 +139,146 @@ def gif2flipbook(
         Non-printable border at the top and bottom of the page (in pixels).
     """
 
-    cwd = os.getcwd()
+    cwd = Path.cwd()
     numbers_font = ImageFont.truetype(os.path.join(cwd, "baskvl.ttf"), 60)
+
+    _path_video = Path(path_video)
+
+    # Determine output path
+    output_path = Path(
+        _path_video.parent,
+        f"{_path_video.stem}.flipbook.pdf",
+    )
+    print(f"Output path: {output_path}")
 
     # 1. Convert video into pngs
     frame_durations: List[int] = []
-    print(f"Reading video file: {path_video}")
-    os.makedirs(os.path.join(cwd, "temporary"), exist_ok=True)
-    with Image.open(path_video) as video_object:
-        n_frames = video_object.n_frames
-        try:
-            for i_frame in range(video_object.n_frames):
-                video_object.seek(i_frame)
-                video_object.save(
-                    os.path.join(
-                        cwd,
-                        "temporary",
-                        f"{i_frame}.png",
+    print(f"Reading video file: {str(_path_video)}")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir = Path(temp_dir)
+        with Image.open(_path_video) as video_object:
+            n_frames = video_object.n_frames
+            try:
+                for i_frame in range(video_object.n_frames):
+                    video_object.seek(i_frame)
+                    video_object.save(
+                        os.path.join(
+                            temp_dir,
+                            f"{i_frame}.png",
+                        )
                     )
+                    frame_durations.append(int(video_object.info["duration"]))
+
+            except Exception as e:
+                print(str(e))
+                sys.exit(
+                    " File is not supported for flipbook generation."
+                    + " Please use another file format such as GIF or MP4."
                 )
-                frame_durations.append(int(video_object.info["duration"]))
 
-        except Exception as e:
-            print(str(e))
-            sys.exit(
-                " File is not supported for flipbook generation."
-                + " Please use another file format such as GIF or MP4."
+        print(f"Number of frames: {n_frames}")
+
+        # get resized dimensions
+        width_resized, height_resized, resize_factor = get_resized_dimensions(
+            temp_dir, border, no_size_increase
+        )
+        dimensions = (width_resized, height_resized)
+
+        # where to place the gif
+        pos_left_top = (border, border)
+        pos_right_top = (2550 - border - width_resized, border)
+        pos_left_bot = (border, 3300 - border - height_resized)
+        pos_right_bot = (2550 - border - width_resized, 3300 - border - height_resized)
+        positions = {
+            0: pos_left_top,
+            1: pos_right_top,
+            2: pos_left_bot,
+            3: pos_right_bot,
+        }
+
+        n_pdfs = n_frames // 4 + 1
+        idx_frame = 0
+        part_pdf_paths = list()
+        for idx_pdf in range(n_pdfs):
+            # Blank canvas (white US letter JPEG image, 300 ppi, 2550x3300 px)
+            blank_canvas = Image.open(os.path.join(cwd, "blank_canvas.jpg")).convert(
+                "RGB"
             )
+            blank_canvas_editable = ImageDraw.Draw(blank_canvas)
 
-    print(f"Number of frames: {n_frames}")
+            # Paste frames on canvas
+            for frame_mod in range(4):
+                frame_i = Image.open(
+                    os.path.join(
+                        temp_dir,
+                        f"{idx_frame}.png",
+                    )
+                ).convert("RGB")
 
-    # Each frame will be saved as an individual PDF document, and these will
-    # be merged together after the end of the "for i in range(maximum_frame_number):" loop.
-    pdf_number = 0
+                # resize image
+                if resize_factor != 1:
+                    frame_i = frame_i.resize(
+                        dimensions, resample=Image.Resampling.LANCZOS
+                    )
 
-    # get resized dimensions
-    width_resized, height_resized, resize_factor = get_resized_dimensions(
-        cwd, border, no_size_increase
-    )
-    dimensions = (width_resized, height_resized)
+                # rotate image
+                if rotate != 0:
+                    frame_i = frame_i.rotate(rotate)
 
-    # where to place the gif
-    pos_left_top = (border, border)
-    pos_right_top = (2550 - border - width_resized, border)
-    pos_left_bot = (border, 3300 - border - height_resized)
-    pos_right_bot = (2550 - border - width_resized, 3300 - border - height_resized)
-    positions = {
-        0: pos_left_top,
-        1: pos_right_top,
-        2: pos_left_bot,
-        3: pos_right_bot,
-    }
+                # paste image
+                if frame_mod in [0, 1]:
+                    frame_i = frame_i.rotate(180)
+                blank_canvas.paste(frame_i, cast(Tuple[int, int], positions[frame_mod]))
 
-    n_pdfs = n_frames // 4 + 1
-    pdf_path = os.path.join(cwd, str(date.today()) + " flipbook", "PDF_parts")
-    idx_frame = 0
-    for _ in range(n_pdfs):
-        # Blank canvas (white US letter JPEG image, 300 ppi, 2550x3300 px)
-        blank_canvas = Image.open(os.path.join(cwd, "blank_canvas.jpg")).convert("RGB")
-        blank_canvas_editable = ImageDraw.Draw(blank_canvas)
-
-        # Paste frames on canvas
-        for frame_mod in range(4):
-            frame_i = Image.open(
-                os.path.join(
-                    cwd,
-                    "temporary",
-                    f"{idx_frame}.png",
+                # paste number
+                number_image = get_number_image(idx_frame, numbers_font)
+                paste_number_image(
+                    blank_canvas=blank_canvas,
+                    number_image=number_image,
+                    border=border,
+                    frame_mod=frame_mod,
                 )
-            ).convert("RGB")
 
-            # resize image
-            if resize_factor != 1:
-                frame_i = frame_i.resize(dimensions, resample=Image.Resampling.LANCZOS)
+                idx_frame += 1
+                if idx_frame == n_frames:
+                    break
 
-            # rotate image
-            if rotate != 0:
-                frame_i = frame_i.rotate(rotate)
+            # Draw lines on canvas
+            if not no_lines:
+                blank_canvas_editable.line(
+                    [(2550 / 2, 0), (2550 / 2, 3300)], fill="Gainsboro", width=5
+                )
+                blank_canvas_editable.line(
+                    [(0, 3300 / 2), (2550, 3300 / 2)], fill="Gainsboro", width=5
+                )
 
-            # paste image
-            if frame_mod in [0, 1]:
-                frame_i = frame_i.rotate(180)
-            blank_canvas.paste(frame_i, cast(Tuple[int, int], positions[frame_mod]))
+            # scale pdf
+            if pdf_resolution != 300:
+                blank_canvas = blank_canvas.resize(
+                    (
+                        round(2550 * pdf_resolution / 300),
+                        round(3300 * pdf_resolution / 300),
+                    ),
+                    resample=Image.Resampling.LANCZOS,
+                )
 
-            # paste number
-            number_image = get_number_image(idx_frame, numbers_font)
-            paste_number_image(
-                blank_canvas=blank_canvas,
-                number_image=number_image,
-                border=border,
-                frame_mod=frame_mod,
+            # Save intermittent pdf, merging all PIL pdf gets too big in memory
+            part_pdf_path = os.path.join(
+                temp_dir,
+                f"{idx_pdf}.pdf",
+            )
+            part_pdf_paths.append(part_pdf_path)
+            blank_canvas.save(
+                part_pdf_path,
+                resolution=pdf_resolution,
             )
 
-            idx_frame += 1
-            if idx_frame == n_frames:
-                break
-
-        # Draw lines on canvas
-        if not no_lines:
-            blank_canvas_editable.line(
-                [(2550 / 2, 0), (2550 / 2, 3300)], fill="Gainsboro", width=5
-            )
-            blank_canvas_editable.line(
-                [(0, 3300 / 2), (2550, 3300 / 2)], fill="Gainsboro", width=5
-            )
-
-        # scale pdf
-        if pdf_resolution != 300:
-            blank_canvas = blank_canvas.resize(
-                (
-                    round(2550 * pdf_resolution / 300),
-                    round(3300 * pdf_resolution / 300),
-                ),
-                resample=Image.Resampling.LANCZOS,
-            )
-
-        # Save intermittent pdf, as PIL pdf get too big
-        if not os.path.exists(pdf_path):
-            os.makedirs(pdf_path)
-        pdf_number += 1
-        blank_canvas.save(
-            os.path.join(
-                pdf_path,
-                str(date.today()) + " flipbook-" + str(pdf_number) + ".pdf",
-            ),
-            resolution=pdf_resolution,
-        )
-
-    # The list returned by "glob" is sorted, such that the number suffixes directly
-    # preceding the ".pdf" file extension may be assembled in sequence in the resulting list.
-    # For example: "['2023-10-05 flipbook-1.pdf', '2023-10-05 flipbook-2.pdf',
-    #'2023-10-05 flipbook-3.pdf']. This is important in order merge the PDF documents
-    # in the correct order.
-    pdf_files = sorted(
-        glob.glob(os.path.join(pdf_path, "*.pdf")),
-        key=lambda x: int(x.split("-")[-1].split(".")[0]),
-    )
-    pdf_merger = PdfMerger()
-    for path in pdf_files:
-        pdf_merger.append(path)
-    pdf_merger.write(
-        os.path.join(
-            cwd, str(date.today()) + " flipbook", str(date.today()) + " flipbook.pdf"
-        )
-    )
-
-    # The folder containing the separate PDF parts is deleted.
-    shutil.rmtree(os.path.join(pdf_path))
-
-    # Lastly, the "PNGS" folder containing the PNGs and its contents is deleted.
-    shutil.rmtree(os.path.join(cwd, "temporary"))
+        # Merge pdfs into one
+        pdf_merger = PdfMerger()
+        for part_pdf_path in part_pdf_paths:
+            pdf_merger.append(part_pdf_path)
+        pdf_merger.write(output_path)
 
 
 if __name__ == "__main__":
@@ -302,7 +289,7 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--path_video", type=str, help="path to the video to be converted."
+        "path_video", type=str, help="path to the video to be converted."
     )
     parser.add_argument(
         "--rotate",
