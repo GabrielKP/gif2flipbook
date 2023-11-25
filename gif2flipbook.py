@@ -8,6 +8,7 @@ from typing import List, Tuple, cast
 
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfMerger
+from tqdm import trange
 
 
 def get_resized_dimensions(
@@ -112,14 +113,59 @@ def paste_number_image(
         )
 
 
+def gif2pngs(
+    _path_video: Path,
+    temp_dir: Path,
+) -> int:
+    """Saves video as pngs into a dir. Returns amount of frames."""
+    if _path_video.suffix in ["gif", "webp", "apng", "avif", "flif", "mng"]:
+        # Can use PIL to open single images
+        with Image.open(_path_video) as video_object:
+            n_frames = video_object.n_frames
+            try:
+                for i_frame in range(video_object.n_frames):
+                    video_object.seek(i_frame)
+                    video_object.save(
+                        os.path.join(
+                            temp_dir,
+                            f"{i_frame}.png",
+                        )
+                    )
+
+            except Exception as e:
+                print(str(e))
+                sys.exit(
+                    " File is not supported for flipbook generation."
+                    + " Please use another file format such as GIF or MP4."
+                )
+    else:
+        # Use cv2 to open video files
+        import cv2
+
+        video_object = cv2.VideoCapture(str(_path_video))
+        success, frame = video_object.read()
+        i_frame = 0
+        while success:
+            cv2.imwrite(
+                os.path.join(
+                    temp_dir,
+                    f"{i_frame}.png",
+                ),
+                frame,
+            )
+            i_frame += 1
+            success, frame = video_object.read()
+        n_frames = i_frame
+
+    return n_frames
+
+
 def gif2flipbook(
     path_video: str,
-    path_pdf: str | None = None,
     rotate: int = -90,
     no_lines: bool = False,
     border: int = 75,
     no_size_increase: bool = False,
-    fps: int | None = None,
     pdf_resolution: int = 200,
 ):
     """Convert a video into a pdf which can be printed as a flipbook.
@@ -151,41 +197,23 @@ def gif2flipbook(
     )
     print(f"Output path: {output_path}")
 
-    # 1. Convert video into pngs
-    frame_durations: List[int] = []
-    print(f"Reading video file: {str(_path_video)}")
-
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir = Path(temp_dir)
-        with Image.open(_path_video) as video_object:
-            n_frames = video_object.n_frames
-            try:
-                for i_frame in range(video_object.n_frames):
-                    video_object.seek(i_frame)
-                    video_object.save(
-                        os.path.join(
-                            temp_dir,
-                            f"{i_frame}.png",
-                        )
-                    )
-                    frame_durations.append(int(video_object.info["duration"]))
 
-            except Exception as e:
-                print(str(e))
-                sys.exit(
-                    " File is not supported for flipbook generation."
-                    + " Please use another file format such as GIF or MP4."
-                )
-
+        # 1. Convert video into pngs
+        print(f"Reading images from: {str(_path_video)}")
+        n_frames = gif2pngs(_path_video, temp_dir)
         print(f"Number of frames: {n_frames}")
 
-        # get resized dimensions
+        # 2. Paste pngs into pdf
+
+        # Get image dimensions for pasting on pdf
         width_resized, height_resized, resize_factor = get_resized_dimensions(
             temp_dir, border, no_size_increase
         )
         dimensions = (width_resized, height_resized)
 
-        # where to place the gif
+        # Determine where to place the image on the pdf
         pos_left_top = (border, border)
         pos_right_top = (2550 - border - width_resized, border)
         pos_left_bot = (border, 3300 - border - height_resized)
@@ -197,11 +225,12 @@ def gif2flipbook(
             3: pos_right_bot,
         }
 
-        n_pdfs = n_frames // 4 + 1
+        # Loop through pdfs and paste frames on it
+        n_pdfs = math.ceil(n_frames / 4)
         idx_frame = 0
         part_pdf_paths = list()
-        for idx_pdf in range(n_pdfs):
-            # Blank canvas (white US letter JPEG image, 300 ppi, 2550x3300 px)
+        for idx_pdf in trange(n_pdfs, desc="Pasting images"):
+            # Load blank canvas (white US letter JPEG image, 300 ppi, 2550x3300 px)
             blank_canvas = Image.open(os.path.join(cwd, "blank_canvas.jpg")).convert(
                 "RGB"
             )
@@ -275,10 +304,12 @@ def gif2flipbook(
             )
 
         # Merge pdfs into one
+        print("Merging pdfs")
         pdf_merger = PdfMerger()
         for part_pdf_path in part_pdf_paths:
             pdf_merger.append(part_pdf_path)
         pdf_merger.write(output_path)
+        print(f"Output pdf: {output_path}")
 
 
 if __name__ == "__main__":
@@ -333,6 +364,5 @@ if __name__ == "__main__":
         no_lines=args.no_lines,
         border=args.border,
         no_size_increase=args.no_size_increase,
-        fps=args.fps,
         pdf_resolution=args.pdf_resolution,
     )
