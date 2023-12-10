@@ -25,10 +25,10 @@ def get_resized_dimensions(
     width, height = frame.size
 
     # 2550: width of 300ppi US letter page in pixels
-    printable_width = 2550 / 2 - 2 * border
+    # 100: space for page number text
+    printable_width = 2550 / 2 - 2 * border - 100
     # 3300: height of 300ppi US letter page in pixels
-    # 150: space for page number text
-    printable_height = 3300 / 2 - 2 * border - 150
+    printable_height = 3300 / 4 - 2 * border
     width_check = 1 - (width - printable_width) / width
     height_check = 1 - (height - printable_height) / height
     if width_check < 1 or height_check < 1:
@@ -53,8 +53,8 @@ def get_resized_dimensions(
 def get_number_image(number: int, numbers_font: ImageFont.FreeTypeFont) -> Image.Image:
     page_number_box = numbers_font.getbbox(str(number))
     number_image_size = (
-        math.floor((page_number_box[2] - page_number_box[0]) * 2),
-        math.floor((page_number_box[3] - page_number_box[1]) * 2),
+        math.floor((page_number_box[2] - page_number_box[0]) * 1.5),
+        math.floor((page_number_box[3] - page_number_box[1]) * 1.5),
     )
     number_image = Image.new("RGBA", number_image_size, (255, 255, 255, 0))
     number_image_editable = ImageDraw.Draw(number_image)
@@ -76,41 +76,31 @@ def paste_number_image(
     number_image: Image.Image,
     border: int,
     frame_mod: int,
+    width: int,
+    height: int,
 ):
-    width, height = number_image.size
-    half_width = width / 2
-    if frame_mod == 0:
-        blank_canvas.paste(
-            number_image.rotate(180),
-            (
-                math.floor(2550 * 0.25 - half_width),
-                math.floor(3300 / 2 - border - height),
-            ),
-        )
-    elif frame_mod == 1:
-        blank_canvas.paste(
-            number_image.rotate(180),
-            (
-                math.floor(2550 * 0.75 - half_width),
-                math.floor(3300 / 2 - border - height),
-            ),
-        )
-    elif frame_mod == 2:
-        blank_canvas.paste(
-            number_image,
-            (
-                math.floor(2550 * 0.25 - half_width),
-                math.floor(3300 / 2 + border),
-            ),
-        )
+    pheight = height - 2 * border
+    qpheight = pheight // 4
+    if frame_mod < 4:
+        x = math.floor(width / 2 - 120)
+        number_image = number_image.rotate(180)
     else:
-        blank_canvas.paste(
-            number_image,
-            (
-                math.floor(2550 * 0.75 - half_width),
-                math.floor(3300 / 2 + border),
-            ),
-        )
+        x = math.floor(2550 - width / 2 + 60)
+    if frame_mod % 4 == 0:
+        y = math.floor(border + qpheight / 2)
+    elif frame_mod % 4 == 1:
+        y = math.floor(border + qpheight + qpheight / 2)
+    elif frame_mod % 4 == 2:
+        y = math.floor(border + 2 * qpheight + qpheight / 2)
+    else:
+        y = math.floor(border + 3 * qpheight + qpheight / 2)
+    blank_canvas.paste(
+        number_image,
+        (
+            x,
+            y,
+        ),
+    )
 
 
 def gif2pngs(
@@ -220,23 +210,48 @@ def gif2flipbook(
         )
         dimensions = (width_resized, height_resized)
 
-        # Determine where to place the image on the pdf
-        pos_left_top = (border + x_offset, border - y_offset)
-        pos_right_top = (2550 - border - width_resized + x_offset, border - y_offset)
-        pos_left_bot = (border + x_offset, 3300 - border - height_resized + y_offset)
-        pos_right_bot = (
-            2550 - border - width_resized + x_offset,
-            3300 - border - height_resized + y_offset,
-        )
+        # Determine where to place the images on the pdf
+        # bbbbbbbbbbbbbbbbbbbb
+        # b left 1 | right 1 b
+        # b -------|-------- b
+        # b left 2 | right 2 b
+        # b -------|-------- b
+        # b left 3 | right 3 b
+        # b -------|-------- b
+        # b left 4 | right 4 b
+        # bbbbbbbbbbbbbbbbbbbb
+        height = 3300
+        width = 2550
+        pheight = height - 2 * border
+        right_image_x = width - border - width_resized - x_offset
+        pos_left_1 = (border + x_offset, border - y_offset)
+        pos_left_2 = (border + x_offset, border + (pheight // 4) - y_offset)
+        pos_left_3 = (border + x_offset, border + (pheight // 2) - y_offset)
+        pos_left_4 = (border + x_offset, border + (pheight - pheight // 4) - y_offset)
+        pos_right_1 = (right_image_x, border - y_offset)
+        pos_right_2 = (right_image_x, border + (pheight // 4) - y_offset)
+        pos_right_3 = (right_image_x, border + (pheight // 2) - y_offset)
+        pos_right_4 = (right_image_x, border + (pheight - pheight // 4) - y_offset)
+        # pos_left_top = (border + x_offset, border - y_offset)
+        # pos_right_top = (2550 - border - width_resized + x_offset, border - y_offset)
+        # pos_left_bot = (border + x_offset, 3300 - border - height_resized + y_offset)
+        # pos_right_bot = (
+        #     2550 - border - width_resized + x_offset,
+        #     3300 - border - height_resized + y_offset,
+        # )
         positions = {
-            0: pos_left_top,
-            1: pos_right_top,
-            2: pos_left_bot,
-            3: pos_right_bot,
+            0: pos_left_1,
+            1: pos_left_2,
+            2: pos_left_3,
+            3: pos_left_4,
+            4: pos_right_1,
+            5: pos_right_2,
+            6: pos_right_3,
+            7: pos_right_4,
         }
 
         # Loop through pdfs and paste frames on it
-        n_pdfs = math.ceil(n_frames / 4)
+        n_pdfs = math.ceil(n_frames / 8)
         idx_frame = 0
         part_pdf_paths = list()
         for idx_pdf in trange(n_pdfs, desc="Pasting images"):
@@ -247,7 +262,7 @@ def gif2flipbook(
             blank_canvas_editable = ImageDraw.Draw(blank_canvas)
 
             # Paste frames on canvas
-            for frame_mod in range(4):
+            for frame_mod in range(8):
                 frame_i = Image.open(
                     os.path.join(
                         temp_dir,
@@ -266,7 +281,7 @@ def gif2flipbook(
                     frame_i = frame_i.rotate(rotate)
 
                 # paste image
-                if frame_mod in [0, 1]:
+                if frame_mod > 3:
                     frame_i = frame_i.rotate(180)
                 blank_canvas.paste(frame_i, cast(Tuple[int, int], positions[frame_mod]))
 
@@ -277,6 +292,8 @@ def gif2flipbook(
                     number_image=number_image,
                     border=border,
                     frame_mod=frame_mod,
+                    width=width,
+                    height=height,
                 )
 
                 idx_frame += 1
@@ -285,11 +302,28 @@ def gif2flipbook(
 
             # Draw lines on canvas
             if not no_lines:
+                # middle vertical
                 blank_canvas_editable.line(
-                    [(2550 / 2, 0), (2550 / 2, 3300)], fill="Gainsboro", width=5
+                    [(width / 2, 0), (width / 2, height)], fill="Gainsboro", width=5
                 )
+                # horizontal 1
                 blank_canvas_editable.line(
-                    [(0, 3300 / 2), (2550, 3300 / 2)], fill="Gainsboro", width=5
+                    [(0, border + pheight // 4), (width, border + pheight // 4)],
+                    fill="Gainsboro",
+                    width=5,
+                )
+                # horizontal 2 (middle)
+                blank_canvas_editable.line(
+                    [(0, height / 2), (width, height / 2)], fill="Gainsboro", width=5
+                )
+                # horizontal 3
+                blank_canvas_editable.line(
+                    [
+                        (0, height - border - pheight // 4),
+                        (width, height - border - pheight // 4),
+                    ],
+                    fill="Gainsboro",
+                    width=5,
                 )
 
             # scale pdf
@@ -335,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rotate",
         type=int,
-        default=-90,
+        default=180,
         help="Rotate the video by the specified number of degrees.",
     )
     parser.add_argument(
@@ -346,7 +380,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--border",
         type=int,
-        default=75,
+        default=0,
         help="Non-printable border at the top and bottom of the page (in inches).",
     )
     parser.add_argument(
