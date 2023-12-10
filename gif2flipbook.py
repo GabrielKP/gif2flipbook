@@ -167,6 +167,8 @@ def gif2flipbook(
     border: int = 75,
     no_size_increase: bool = False,
     pdf_resolution: int = 200,
+    x_offset: int = 0,
+    y_offset: int = 0,
 ):
     """Convert a video into a pdf which can be printed as a flipbook.
 
@@ -183,6 +185,11 @@ def gif2flipbook(
         Do not print the guiding lines on the flipbook pages.
     border : int, default=`75`
         Non-printable border at the top and bottom of the page (in pixels).
+    x_offset : int, default=`0`
+        Offset in the x direction (in pixels).
+    y_offset : int, default=`0`
+        Offset in the y direction (in pixels). Reversed for images at the bottom
+        of the page.
     """
 
     cwd = Path.cwd()
@@ -214,10 +221,13 @@ def gif2flipbook(
         dimensions = (width_resized, height_resized)
 
         # Determine where to place the image on the pdf
-        pos_left_top = (border, border)
-        pos_right_top = (2550 - border - width_resized, border)
-        pos_left_bot = (border, 3300 - border - height_resized)
-        pos_right_bot = (2550 - border - width_resized, 3300 - border - height_resized)
+        pos_left_top = (border + x_offset, border - y_offset)
+        pos_right_top = (2550 - border - width_resized + x_offset, border - y_offset)
+        pos_left_bot = (border + x_offset, 3300 - border - height_resized + y_offset)
+        pos_right_bot = (
+            2550 - border - width_resized + x_offset,
+            3300 - border - height_resized + y_offset,
+        )
         positions = {
             0: pos_left_top,
             1: pos_right_top,
@@ -356,6 +366,18 @@ if __name__ == "__main__":
         default=200,
         help="Resolution of the pdf to be generated (in dpi).",
     )
+    parser.add_argument(
+        "--x_offset",
+        type=int,
+        default=0,
+        help="Offset in the x direction (in pixels).",
+    )
+    parser.add_argument(
+        "--y_offset",
+        type=int,
+        default=0,
+        help="Offset in the y direction (in pixels).",
+    )
     args = parser.parse_args()
 
     gif2flipbook(
@@ -365,4 +387,6 @@ if __name__ == "__main__":
         border=args.border,
         no_size_increase=args.no_size_increase,
         pdf_resolution=args.pdf_resolution,
+        x_offset=args.x_offset,
+        y_offset=args.y_offset,
     )
